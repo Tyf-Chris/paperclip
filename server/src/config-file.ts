@@ -53,5 +53,5 @@ export function resolveDeploymentMode(fileConfig = readConfigFile()): Deployment
   const fromEnv = process.env.PAPERCLIP_DEPLOYMENT_MODE;
   return fromEnv && DEPLOYMENT_MODES.includes(fromEnv as DeploymentMode)
     ? fromEnv as DeploymentMode
-    : fileConfig?.server.deploymentMode ?? "local_trusted";
+    : fileConfig?.server.deploymentMode ?? "authenticated";
 }

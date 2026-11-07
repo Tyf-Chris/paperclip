@@ -60,7 +60,7 @@ import { createPiStdoutCompactor, resolvePiStdoutLogMode } from "./stdout-compac
 import { ensurePiModelConfiguredAndAvailable } from "./models.js";
 import { preparePiRuntimeConfig } from "./runtime-config.js";
 import { preparePiOpenRouterExtension } from "./openrouter-extension.js";
-import { SANDBOX_INSTALL_COMMAND } from "../index.js";
+import { assertPiRuntimeAvailable, SANDBOX_INSTALL_COMMAND } from "../index.js";
 
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -225,6 +225,7 @@ async function readSavedSessionCwd(input: {
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
+  assertPiRuntimeAvailable();
   const providerStop = createProviderStoppedBoundary(ctx.onProviderStopped);
   const { runId, agent, runtime, config, context, onLog, onMeta, onSpawn, authToken } = ctx;
   const executionTarget = readAdapterExecutionTarget({

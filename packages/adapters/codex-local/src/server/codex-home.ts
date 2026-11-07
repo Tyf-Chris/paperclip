@@ -220,6 +220,42 @@ export async function codexHomeHasUsableAuth(home: string): Promise<boolean> {
   }
 }
 
+/** Legacy adapters must use a selected account, never the operator's ambient login. */
+export async function assertLegacyCodexCredentialSelection(
+  config: Record<string, unknown>,
+  hostEnv: NodeJS.ProcessEnv = process.env,
+  companyId?: string,
+): Promise<void> {
+  const env = typeof config.env === "object" && config.env !== null && !Array.isArray(config.env)
+    ? config.env as Record<string, unknown> : {};
+  const apiKey = [env.OPENAI_API_KEY, env.CODEX_API_KEY].some(
+    value => typeof value === "string" && value.trim().length > 0,
+  );
+  const configuredHome = typeof env.CODEX_HOME === "string" && env.CODEX_HOME.trim()
+    ? path.resolve(env.CODEX_HOME.trim()) : null;
+  if (configuredHome) {
+    const canonical = async (candidate: string) => fs.realpath(candidate).catch(() => path.resolve(candidate));
+    const selectedHome = await canonical(configuredHome);
+    const selectedAuth = await canonical(path.join(selectedHome, "auth.json"));
+    const hostHomes = new Set([resolveSharedCodexHomeDir(hostEnv), path.join(os.homedir(), ".codex")]);
+    for (const candidate of hostHomes) {
+      const hostHome = await canonical(candidate);
+      const relativeHostHome = path.relative(selectedHome, hostHome);
+      const containsHostHome = relativeHostHome === "" ||
+        (relativeHostHome !== ".." && !relativeHostHome.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeHostHome));
+      const hostAuth = await canonical(path.join(hostHome, "auth.json"));
+      if (containsHostHome || selectedAuth === hostAuth) {
+        throw new Error("Legacy Codex cannot use the host Codex home or its shared login. Select a dedicated account connection or a separate CODEX_HOME.");
+      }
+    }
+  }
+  if (apiKey || (config.managedAiConnection && configuredHome)) return;
+  const accountHome = configuredHome && isCodexAuthCachePath(hostEnv, configuredHome);
+  const inheritedManagedHome = configuredHome && isManagedCodexHomePath(hostEnv, companyId, configuredHome) && !accountHome;
+  if (configuredHome && !inheritedManagedHome && await codexHomeHasUsableAuth(configuredHome)) return;
+  throw new Error("Legacy Codex requires an explicit agent API key or account connection, or a dedicated CODEX_HOME with its own login. The host Codex login is not inherited.");
+}
+
 async function codexHomeHasMatchingApiKeyAuth(home: string, apiKey: string): Promise<boolean> {
   const authPath = path.join(home, "auth.json");
   const existing = await fs.lstat(authPath).catch(() => null);
@@ -659,7 +695,9 @@ export async function seedManagedCodexHome(
   targetHome: string,
   env: NodeJS.ProcessEnv,
   onLog: AdapterExecutionContext["onLog"],
-  options: { apiKey?: string | null } = {},
+  // Native account reconciliation retains its existing defaults. Legacy runs
+  // disable both source imports unless copying an explicitly selected home.
+  options: { apiKey?: string | null; seedAuthFromSource?: boolean; seedConfigFromSource?: boolean } = {},
 ): Promise<void> {
   const apiKey = nonEmpty(options.apiKey ?? undefined);
 
@@ -708,7 +746,7 @@ export async function seedManagedCodexHome(
   // deleting it would silently sign the company out right after a successful
   // device login.
   let keepPromotedAuth = false;
-  if (!apiKey && seedFromShared && !credentialStoreEntry) {
+  if (!apiKey && seedFromShared && options.seedAuthFromSource !== false && !credentialStoreEntry) {
     const authPath = path.join(targetHome, "auth.json");
     const existing = await fs.lstat(authPath).catch(() => null);
     if (existing && !existing.isSymbolicLink()) {
@@ -774,7 +812,7 @@ export async function seedManagedCodexHome(
   }
 
   if (seedFromShared) {
-    for (const name of SYMLINKED_SHARED_FILES) {
+    for (const name of options.seedAuthFromSource === false ? [] : SYMLINKED_SHARED_FILES) {
       // The kept promoted credential is authoritative for this home; the shared
       // symlink would silently swap the account back to the host login. A
       // credential-store entry's auth.json is authoritative unconditionally.
@@ -784,7 +822,7 @@ export async function seedManagedCodexHome(
       await ensureSymlink(path.join(targetHome, name), source);
     }
 
-    for (const name of COPIED_SHARED_FILES) {
+    for (const name of options.seedConfigFromSource === false ? [] : COPIED_SHARED_FILES) {
       const source = path.join(sourceHome, name);
       if (!(await pathExists(source))) continue;
       await ensureCopiedFile(path.join(targetHome, name), source);
@@ -792,7 +830,9 @@ export async function seedManagedCodexHome(
 
     await onLog(
       "stdout",
-      `[paperclip] Using ${isWorktreeMode(env) ? "worktree-isolated" : "Paperclip-managed"} Codex home "${targetHome}" (seeded from "${sourceHome}").\n`,
+      options.seedAuthFromSource === false && options.seedConfigFromSource === false
+        ? `[paperclip] Using Paperclip-managed Codex home "${targetHome}" without importing the host configuration or login.\n`
+        : `[paperclip] Using ${isWorktreeMode(env) ? "worktree-isolated" : "Paperclip-managed"} Codex home "${targetHome}" (seeded from "${sourceHome}").\n`,
     );
   }
 
@@ -820,7 +860,7 @@ export async function prepareManagedCodexHome(
   env: NodeJS.ProcessEnv,
   onLog: AdapterExecutionContext["onLog"],
   companyId?: string,
-  options: { apiKey?: string | null } = {},
+  options: { apiKey?: string | null; seedAuthFromSource?: boolean; seedConfigFromSource?: boolean } = {},
 ): Promise<string> {
   const targetHome = resolveManagedCodexHomeDir(env, companyId);
   await seedManagedCodexHome(targetHome, env, onLog, options);

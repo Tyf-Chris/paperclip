@@ -16,8 +16,8 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
     ports:
-      - "${REVIEW_PAPERCLIP_PORT:-3100}:3100"
-      - "${REVIEW_VITE_PORT:-5173}:5173"
+      - "127.0.0.1:${REVIEW_PAPERCLIP_PORT:-3100}:3100"
+      - "127.0.0.1:${REVIEW_VITE_PORT:-5173}:5173"
     volumes:
       - review-home:/home/reviewer
       - review-work:/work

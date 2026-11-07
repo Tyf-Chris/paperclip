@@ -66,6 +66,7 @@ import {
   type LoginCommandKey,
 } from "./login-command.js";
 import { logger } from "../middleware/logger.js";
+import { assertUnsandboxedPluginExecutionAllowed } from "./plugin-execution-policy.js";
 import { traceparentFromContextToken } from "../instrumentation.js";
 
 // ---------------------------------------------------------------------------
@@ -3162,6 +3163,7 @@ export function createPluginWorkerHandle(
   // -----------------------------------------------------------------------
 
   async function startInternal(): Promise<void> {
+    assertUnsandboxedPluginExecutionAllowed();
     if (status === "running" || status === "starting") {
       throw new Error(`Worker for plugin "${pluginId}" is already ${status}`);
     }

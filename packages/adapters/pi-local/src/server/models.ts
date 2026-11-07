@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AdapterModel } from "@paperclipai/adapter-utils";
 import { asString, runChildProcess } from "@paperclipai/adapter-utils/server-utils";
+import { assertPiRuntimeAvailable } from "../index.js";
 
 const MODELS_CACHE_TTL_MS = 60_000;
 
@@ -105,6 +106,7 @@ export async function discoverPiModels(input: {
   cwd?: unknown;
   env?: unknown;
 } = {}): Promise<AdapterModel[]> {
+  assertPiRuntimeAvailable();
   const command = resolvePiCommand(input.command);
   const cwd = asString(input.cwd, process.cwd());
   const env = normalizeEnv(input.env);
@@ -152,6 +154,7 @@ export async function discoverPiModelsCached(input: {
   cwd?: unknown;
   env?: unknown;
 } = {}): Promise<AdapterModel[]> {
+  assertPiRuntimeAvailable();
   const command = resolvePiCommand(input.command);
   const cwd = asString(input.cwd, process.cwd());
   const env = normalizeEnv(input.env);

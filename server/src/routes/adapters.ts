@@ -53,6 +53,7 @@ import { isCloudManagedInstance } from "../services/cloud-instance.js";
 import { getHiddenSettings } from "../services/settings-visibility.js";
 import { assertBoardOrgAccess, assertCompanyAccess, assertInstanceAdmin } from "./authz.js";
 import { BUILTIN_ADAPTER_TYPES } from "../adapters/builtin-adapter-types.js";
+import { assertUnsandboxedPluginExecutionAllowed } from "../services/plugin-execution-policy.js";
 import { agentRunnerAvailability, type RunnerTarget } from "../services/agent-runner-selection.js";
 import type { AgentRunnerAvailability } from "@paperclipai/shared";
 
@@ -71,6 +72,11 @@ function assertAdapterCodeInstallAllowed() {
     throw forbidden("Adapter installation is platform-managed on cloud-managed instances", {
       code: "adapter_install_platform_managed",
     });
+  }
+  try {
+    assertUnsandboxedPluginExecutionAllowed();
+  } catch (error) {
+    throw forbidden((error as Error).message, { code: "adapter_host_execution_disabled" });
   }
 }
 
@@ -359,7 +365,7 @@ export function adapterRoutes(options: {
 
         logger.info({ spec, pluginsDir }, "Installing adapter package via npm");
 
-        await execFileAsync("npm", ["install", "--no-save", spec], {
+        await execFileAsync("npm", ["install", "--no-save", "--ignore-scripts", spec], {
           cwd: pluginsDir,
           timeout: 120_000,
         });
@@ -578,7 +584,7 @@ export function adapterRoutes(options: {
     if (externalRecord.packageName && !externalRecord.localPath) {
       try {
         const pluginsDir = getAdapterPluginsDir();
-        await execFileAsync("npm", ["uninstall", externalRecord.packageName], {
+        await execFileAsync("npm", ["uninstall", "--ignore-scripts", externalRecord.packageName], {
           cwd: pluginsDir,
           timeout: 60_000,
         });
@@ -694,7 +700,7 @@ export function adapterRoutes(options: {
 
       logger.info({ type, packageName: record.packageName }, "Reinstalling adapter package via npm");
 
-      await execFileAsync("npm", ["install", "--no-save", record.packageName], {
+      await execFileAsync("npm", ["install", "--no-save", "--ignore-scripts", record.packageName], {
         cwd: pluginsDir,
         timeout: 120_000,
       });

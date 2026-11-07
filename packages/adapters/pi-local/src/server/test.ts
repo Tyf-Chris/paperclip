@@ -21,7 +21,7 @@ import {
 } from "@paperclipai/adapter-utils/execution-target";
 import { discoverPiModelsCached } from "./models.js";
 import { parsePiJsonl } from "./parse.js";
-import { SANDBOX_INSTALL_COMMAND } from "../index.js";
+import { assertPiRuntimeAvailable, SANDBOX_INSTALL_COMMAND } from "../index.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -81,6 +81,16 @@ function buildPiModelDiscoveryFailureCheck(message: string): AdapterEnvironmentC
 export async function testEnvironment(
   ctx: AdapterEnvironmentTestContext,
 ): Promise<AdapterEnvironmentTestResult> {
+  try {
+    assertPiRuntimeAvailable();
+  } catch (error) {
+    return {
+      adapterType: ctx.adapterType,
+      status: "fail",
+      checks: [{ code: "pi_security_blocked", level: "error", message: (error as Error).message }],
+      testedAt: new Date().toISOString(),
+    };
+  }
   const checks: AdapterEnvironmentCheck[] = [];
   const config = parseObject(ctx.config);
   const command = asString(config.command, "pi");

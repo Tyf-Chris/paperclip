@@ -39,13 +39,13 @@ import {
   parseObject,
 } from "@paperclipai/adapter-utils/server-utils";
 import { createWorkspaceRestoreTeardown } from "@paperclipai/adapter-utils/workspace-restore-teardown";
-import { normalizeCodexModel } from "../index.js";
+import { normalizeCodexModel, resolveCodexLocalCliPolicy } from "../index.js";
 import { classifyCodexAuthRefreshFailure, extractCodexRetryNotBefore } from "./parse.js";
 import { copyBackCodexAuth } from "./codex-auth-copyback.js";
 import {
+  assertLegacyCodexCredentialSelection,
   buildCodexHomeRefreshProvision,
   evaluateCodexCredentialReadiness,
-  resolveSharedCodexHomeDir,
   stageCodexHomeForSync,
 } from "./codex-home.js";
 import { ADAPTER_AUTH_MISSING_CHECK_CODE } from "./auth-check.js";
@@ -125,9 +125,11 @@ export function buildCodexAcpConfig(config: Record<string, unknown>): Record<str
   const agentCommand = firstNonEmptyString(config.agentCommand, config.acpAgentCommand);
   const stateDir = firstNonEmptyString(config.stateDir, config.acpStateDir);
   const mode = firstNonEmptyString(config.mode, config.acpMode) ?? DEFAULT_ACP_ENGINE_MODE;
-  const permissionMode =
-    firstNonEmptyString(config.permissionMode, config.acpPermissionMode) ??
-    DEFAULT_ACP_ENGINE_PERMISSION_MODE;
+  // ACP must enforce the same bypass choice as the CLI engine. Otherwise a
+  // saved approve-all setting silently removes the caller's approval boundary.
+  const permissionMode = resolveCodexLocalCliPolicy(config).bypass
+    ? firstNonEmptyString(config.permissionMode, config.acpPermissionMode) ?? DEFAULT_ACP_ENGINE_PERMISSION_MODE
+    : "deny-all";
   const nonInteractivePermissions =
     firstNonEmptyString(config.nonInteractivePermissions, config.acpNonInteractivePermissions) ??
     DEFAULT_ACP_ENGINE_NON_INTERACTIVE_PERMISSIONS;
@@ -151,7 +153,7 @@ export function buildCodexAcpConfig(config: Record<string, unknown>): Record<str
 
   return {
     ...config,
-    env: { ...env, PAPERCLIP_CODEX_ACP_NETWORK_ACCESS: String(networkAccess) },
+    env: { OPENAI_API_KEY: "", CODEX_API_KEY: "", ...env, PAPERCLIP_CODEX_ACP_NETWORK_ACCESS: String(networkAccess) },
     agent: "codex",
     mode,
     permissionMode,
@@ -192,8 +194,7 @@ async function prepareCodexRemoteManagedHome(
   // API-key runs do not rotate a subscription refresh token. Keep their
   // sandbox auth out of the shared subscription copy-back path altogether.
   const apiKeyAuth = Boolean(
-    env.OPENAI_API_KEY?.trim() || env.CODEX_API_KEY?.trim()
-    || process.env.OPENAI_API_KEY?.trim() || process.env.CODEX_API_KEY?.trim(),
+    env.OPENAI_API_KEY?.trim() || env.CODEX_API_KEY?.trim(),
   );
   // Curated allowlist temp dir (auth/config/skills only); caller owns cleanup.
   const stagedCodexHomeDir = await stageCodexHomeForSync(effectiveCodexHome, { runId });
@@ -208,12 +209,12 @@ async function prepareCodexRemoteManagedHome(
         provision: buildCodexHomeRefreshProvision({ mergeAuth: !apiKeyAuth }),
         // Subscription-only outbound copy-back at teardown, under the same
         // direction-agnostic decision predicate + directory merge-lock +
-        // atomic-rename + 0600 guard. Target is the SHARED host auth.json
-        // (the symlink source managed homes point at), never an in-sandbox copy.
+        // atomic-rename + 0600 guard. The target is the selected account's
+        // auth.json, never the operator's ambient login or an in-sandbox copy.
         restore: apiKeyAuth ? undefined : async ({ assetDir, readFile }) =>
           void (await copyBackCodexAuth({
             readSandboxAuth: () => readFile(path.posix.join(assetDir, "auth.json")),
-            hostAuthPath: path.join(input.config.managedAiConnection ? effectiveCodexHome : resolveSharedCodexHomeDir(process.env), "auth.json"),
+            hostAuthPath: path.join(effectiveCodexHome, "auth.json"),
             log: (line) => onLog("stdout", `${line}\n`),
           })),
       },
@@ -369,6 +370,7 @@ export function resolveCodexAcpBillingIdentity(
 export function createCodexAcpExecutor(options: CodexAcpExecutorOptions = {}): CodexAcpExecutor {
   let executor: CodexAcpExecutor | null = null;
   return async (ctx) => {
+    await assertLegacyCodexCredentialSelection(ctx.config, process.env, ctx.agent.companyId);
     let currentExecutor = executor;
     if (!currentExecutor) {
       const { createAcpxEngineExecutor } = await import("@paperclipai/adapter-utils/acpx-engine/execute");
@@ -522,6 +524,14 @@ export async function testCodexAcpEnvironment(
 ): Promise<AdapterEnvironmentTestResult> {
   const checks: AdapterEnvironmentCheck[] = [];
   const config = parseObject(ctx.config);
+  try {
+    await assertLegacyCodexCredentialSelection(config, process.env, ctx.companyId);
+  } catch (error) {
+    return {
+      adapterType: "codex_local", status: "fail", testedAt: new Date().toISOString(),
+      checks: [{ code: ADAPTER_AUTH_MISSING_CHECK_CODE, level: "error", message: (error as Error).message }],
+    };
+  }
   const target = ctx.executionTarget ?? null;
   const targetIsRemote = target?.kind === "remote";
   const targetIsSandbox = target?.kind === "remote" && target.transport === "sandbox";
@@ -588,14 +598,9 @@ export async function testCodexAcpEnvironment(
 
   const envConfig = parseObject(config.env);
   if (!targetIsRemote) {
-    const configApiKey = isNonEmpty(envConfig.OPENAI_API_KEY) ? envConfig.OPENAI_API_KEY : null;
-    const hostApiKey =
-      Object.prototype.hasOwnProperty.call(envConfig, "OPENAI_API_KEY")
-        ? null
-        : isNonEmpty(process.env.OPENAI_API_KEY)
-        ? process.env.OPENAI_API_KEY
-        : null;
-    const configuredApiKey = configApiKey ?? hostApiKey;
+    const configApiKey = isNonEmpty(envConfig.OPENAI_API_KEY) ? envConfig.OPENAI_API_KEY
+      : isNonEmpty(envConfig.CODEX_API_KEY) ? envConfig.CODEX_API_KEY : null;
+    const configuredApiKey = configApiKey;
     const configuredCodexHome = isNonEmpty(envConfig.CODEX_HOME) ? envConfig.CODEX_HOME : null;
     const credentialReadiness = await evaluateCodexCredentialReadiness({
       env: process.env,
@@ -609,7 +614,7 @@ export async function testCodexAcpEnvironment(
         code: "codex_acp_openai_api_key_detected",
         level: "info",
         message: "OPENAI_API_KEY is set for Codex ACP authentication.",
-        detail: `Detected in ${configApiKey ? "adapter config env" : "server environment"}.`,
+        detail: "Detected in adapter config env.",
       });
     } else if (credentialReadiness.ready && !credentialReadiness.managed) {
       checks.push({
@@ -623,14 +628,14 @@ export async function testCodexAcpEnvironment(
         code: "codex_acp_native_auth_detected",
         level: "info",
         message: "Codex ACP can use Codex native authentication.",
-        detail: `Credentials are available through ${credentialReadiness.effectiveHome} or shared source ${credentialReadiness.sharedSourceHome}.`,
+        detail: `Credentials are available through the selected home ${credentialReadiness.effectiveHome}.`,
       });
     } else {
       checks.push({
         code: "codex_acp_credentials_missing",
         level: "warn",
         message: "No Codex ACP credentials visible to the Paperclip server were detected.",
-        hint: "Set OPENAI_API_KEY in the agent adapter env, set it in the Paperclip server environment, or run `codex login` for the same OS user that runs the Paperclip server before starting a Codex ACP agent. A `/login` in a separate Codex/chat session does not authenticate the server.",
+        hint: "Select an account connection, set an agent API key, or configure a dedicated CODEX_HOME. The host login is not inherited.",
       });
     }
   } else if (targetIsSandbox) {

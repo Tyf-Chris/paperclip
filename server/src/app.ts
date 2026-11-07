@@ -577,6 +577,24 @@ export async function createApp(
   // when the server may be reachable without a known reverse proxy in front.
   applyTrustProxy(app, parseTrustProxyEnv(process.env.TRUST_PROXY));
 
+  // Reject unapproved authorities before allocating request-body buffers.
+  app.use(httpLogger);
+  const privateHostnameGateEnabled = shouldEnablePrivateHostnameGuard({
+    deploymentMode: opts.deploymentMode,
+    deploymentExposure: opts.deploymentExposure,
+  });
+  const privateHostnameAllowSet = resolvePrivateHostnameAllowSet({
+    allowedHostnames: opts.allowedHostnames,
+    bindHost: opts.bindHost,
+  });
+  app.use(
+    privateHostnameGuard({
+      enabled: privateHostnameGateEnabled,
+      allowedHostnames: opts.allowedHostnames,
+      bindHost: opts.bindHost,
+    }),
+  );
+
   app.use(
     COMPANY_IMPORT_API_PATH,
     express.json({
@@ -596,22 +614,6 @@ export async function createApp(
   // File tickets authenticate before parsing bytes; JSON attachments must remain bytes too.
   app.use((req, res, next) => ["/mcp/files/upload", "/mcp/runner/files/upload"].includes(req.path) ? next() : jsonBodyParser(req, res, next));
   app.use("/api", apiCompression());
-  app.use(httpLogger);
-  const privateHostnameGateEnabled = shouldEnablePrivateHostnameGuard({
-    deploymentMode: opts.deploymentMode,
-    deploymentExposure: opts.deploymentExposure,
-  });
-  const privateHostnameAllowSet = resolvePrivateHostnameAllowSet({
-    allowedHostnames: opts.allowedHostnames,
-    bindHost: opts.bindHost,
-  });
-  app.use(
-    privateHostnameGuard({
-      enabled: privateHostnameGateEnabled,
-      allowedHostnames: opts.allowedHostnames,
-      bindHost: opts.bindHost,
-    }),
-  );
   let mcpConfig: ReturnType<typeof publicMcpConfig> = null;
   try { mcpConfig = publicMcpConfig(process.env, opts.authPublicBaseUrl); }
   catch { logger.warn("Assistant connections require an HTTPS public URL (HTTP loopback is allowed for development)."); }

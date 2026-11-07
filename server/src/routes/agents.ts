@@ -139,7 +139,7 @@ import type {
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestResult,
 } from "@paperclipai/adapter-utils";
-import { evaluateCodexCredentialReadiness } from "@paperclipai/adapter-codex-local/server";
+import { assertLegacyLocalAgentExecutionAllowed } from "../services/local-execution-policy.js";
 import type { AdapterAuthSignal, AdapterAuthSignalResponse, CodexAccountBindingClaim } from "@paperclipai/shared";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { skillVersionSelectionMap } from "../services/runtime-skill-selections.js";
@@ -2230,12 +2230,9 @@ export function agentRoutes(
     return record?.type === "secret_ref" && typeof record.secretId === "string";
   }
 
-  // codex_local agents inherit whatever Codex login is already on the device
-  // (the host's ~/.codex or $CODEX_HOME) by default, so a fresh agent needs no
-  // env overrides at all. We only carve out an isolated per-agent CODEX_HOME
-  // when the agent sets its own OPENAI_API_KEY, so that key's api-key auth.json
-  // does not collide with the shared company home other agents use for the host
-  // login. Agents without a key share the host credentials.
+  // An agent API key gets its own Codex home so its auth.json cannot collide
+  // with another agent's credentials. Legacy agents require an explicit key,
+  // dedicated home, or managed account; they do not inherit the host login.
   function applyCodexLocalKeyIsolation(
     companyId: string,
     agentId: string,
@@ -3024,6 +3021,8 @@ export function agentRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const type = assertKnownAdapterType(req.params.type as string);
+    // Model discovery may invoke a provider CLI on the server host.
+    assertLegacyLocalAgentExecutionAllowed({ adapterType: type, executionTarget: null });
     const poolId = asNonEmptyString(req.query.poolId);
     if (poolId) {
       const pool = (await aiConnectionRouterService(db).selectable(companyId, getActorInfo(req).actorId)).find(pool => pool.id === poolId);
@@ -3101,6 +3100,7 @@ export function agentRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const type = assertKnownAdapterType(req.params.type as string);
+    assertLegacyLocalAgentExecutionAllowed({ adapterType: type, executionTarget: null });
 
     const detected = await detectAdapterModel(type);
     res.json(detected);
@@ -3406,6 +3406,7 @@ export function agentRoutes(
             effectiveAdapterConfig.apiKey = req.body.testCredentials.API_SERVER_KEY;
           }
         }
+        assertLegacyLocalAgentExecutionAllowed({ adapterType: type, executionTarget });
         const result = aiBinding ? await withManagedAiProbe(db, { companyId, agentId: req.body.agentId ?? "", responsibleUserId: responsibleUserForAiRequest(req), adapterType: type, binding: aiBinding, config: effectiveAdapterConfig, allowUninstalledPersonal: !savedAgentId || testingSetup, allowUninstalledShared: (!savedAgentId || testingSetup) && await canInstallSharedAiConnectionForNewAgent(db, req, companyId, aiBinding) }, async managed => {
           const managedAiCredentialHome = type === "paperclip_runner" && asRecord(managed.config)?.provider === "codex" && managed.home
             ? path.join(managed.home, "provider") : undefined;
@@ -3474,14 +3475,9 @@ export function agentRoutes(
     return "absent";
   }
 
-  // The codex_local branch of the auth-signal read. The host filesystem check
-  // (`evaluateCodexCredentialReadiness` against `process.env`) describes only
-  // the Paperclip host, so it is authoritative for the null-environment and
-  // "local" driver cases, where the host is the execution target. For a
-  // non-local environment (a sandbox), the host's own credential state says
-  // nothing about that sandbox, so the route checks the environment's own
-  // OPENAI_API_KEY binding instead and otherwise reports "unknown" -- never
-  // "present" from a host login the sandbox does not share.
+  // The legacy Codex signal counts only explicitly selected environment keys.
+  // A host Codex login is not an agent credential. Native managed-account
+  // readiness is handled by the selected account's own verification path.
   async function evaluateCodexAuthSignal(
     req: Request,
     companyId: string,
@@ -3489,39 +3485,35 @@ export function agentRoutes(
   ): Promise<AdapterAuthSignal> {
     if (environmentId) {
       const environment = await environmentsSvc.getById(environmentId);
-      if (environment && environment.driver !== "local") {
+      if (environment) {
         const environmentEnv = Object.fromEntries(
           Object.entries(parseObject(environment.envVars)).filter(
             ([key]) => !isForbiddenConfigEnvKey(key),
           ),
         );
-        const apiKeyBinding = environmentEnv.OPENAI_API_KEY;
-        if (apiKeyBinding !== undefined) {
+        const keyBindings = Object.fromEntries(["OPENAI_API_KEY", "CODEX_API_KEY"]
+          .filter((key) => environmentEnv[key] !== undefined)
+          .map((key) => [key, environmentEnv[key]]));
+        if (Object.keys(keyBindings).length > 0) {
           const resolution = await secretsSvc.resolveEnvBindings(
             companyId,
-            { OPENAI_API_KEY: apiKeyBinding },
+            keyBindings,
             buildActorSecretContext(req, { consumerType: "environment", consumerId: environmentId }),
           );
-          if (asNonEmptyString(resolution.env.OPENAI_API_KEY)) {
+          if (asNonEmptyString(resolution.env.OPENAI_API_KEY) || asNonEmptyString(resolution.env.CODEX_API_KEY)) {
             return "present";
           }
         }
-        return "unknown";
+        return environment.driver === "local" ? "absent" : "unknown";
       }
     }
 
-    const readiness = await evaluateCodexCredentialReadiness({
-      env: process.env,
-      companyId,
-      configuredCodexHome: null,
-      configuredApiKey: null,
-    });
-    return readiness.ready ? "present" : "absent";
+    return "absent";
   }
 
   // The cheap host-local authentication signal for one adapter type. The route
   // reads host-local state only: a stored Claude login, a resolved environment
-  // env var, or the local Codex credential readiness check. It leases no
+  // env var, or an explicit Codex environment key. It leases no
   // sandbox, starts no shell command, and starts no model request. The two
   // access gates below run before any read, so a caller who cannot create
   // agents for the company and a foreign environment both fail closed before

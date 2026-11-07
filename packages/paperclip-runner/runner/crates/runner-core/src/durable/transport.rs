@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use hmac::{Hmac, Mac};
+use rustls::pki_types::{pem::PemObject, CertificateDer};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -548,7 +549,7 @@ fn custom_tls_connector(path: &Path) -> Result<Connector, DurableRunnerError> {
     let mut roots = rustls::RootCertStore::empty();
     roots.add_parsable_certificates(native.certs);
     let mut reader = BufReader::new(file);
-    let certificates = rustls_pemfile::certs(&mut reader)
+    let certificates = CertificateDer::pem_reader_iter(&mut reader)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| DurableRunnerError::invalid(format!("invalid CA bundle: {error}")))?;
     if certificates.is_empty() {

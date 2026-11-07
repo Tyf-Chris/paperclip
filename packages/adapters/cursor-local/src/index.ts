@@ -1,14 +1,10 @@
 export const type = "cursor";
 export const label = "Cursor";
 
-// Cursor CLI is not distributed as an npm package — the official install
-// path is the upstream installer script at cursor.com/install. Other adapters
-// in this repo prefer `npm install -g <pkg>` which is content-addressed by the
-// registry; cursor must use `curl | bash` until upstream publishes a registry
-// artifact. Pinning a commit/version here would require shipping our own
-// mirror of the installer; revisit if Cursor adds an npm/release-asset
-// equivalent.
-export const SANDBOX_INSTALL_COMMAND = "curl https://cursor.com/install -fsS | bash";
+// The native runner verifies its pinned Cursor distribution. The legacy
+// adapter requires a preinstalled CLI instead of running a changing installer.
+export const SANDBOX_INSTALL_COMMAND =
+  "printf '%s\\n' 'Cursor must be preinstalled in the sandbox from an approved, verified release.' >&2; exit 1";
 
 export const DEFAULT_CURSOR_LOCAL_MODEL = "auto";
 

@@ -2,21 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:net";
-import * as p from "@clack/prompts";
-import pc from "picocolors";
 import { Option, type Command } from "commander";
 import type { Agent, Company, InstanceExperimentalSettings } from "@paperclipai/shared";
 import { PaperclipApiClient } from "../client/http.js";
 import { openUrl } from "../client/board-auth.js";
 import {
   expandHomePrefix,
-  resolveDefaultConfigPath,
-  resolveDefaultContextPath,
 } from "../config/home.js";
 import { readConfig } from "../config/store.js";
 import type { PaperclipConfig } from "../config/schema.js";
-import { runCommand, type StartedServer } from "./run.js";
-import { isLinkedGitWorktree } from "./git-workspace.js";
+import { runCommand } from "./run.js";
 
 export const TEST_DRIVE_HARNESSES = ["claude", "codex", "opencode"] as const;
 export type TestDriveHarness = (typeof TEST_DRIVE_HARNESSES)[number];
@@ -77,16 +72,6 @@ const HARNESS_DEFINITIONS: Record<TestDriveHarness, HarnessDefinition> = {
     credentialName: "OpenRouter API Key",
   },
 };
-
-const NON_PAPERCLIP_ISOLATED_ENV_KEYS = [
-  "DATABASE_URL",
-  "DATABASE_MIGRATION_URL",
-  "HOST",
-  "PORT",
-  "SERVE_UI",
-  "BETTER_AUTH_URL",
-  "BETTER_AUTH_BASE_URL",
-] as const;
 
 function requiredApiResult<T>(value: T | null, action: string): T {
   if (value === null) {
@@ -165,49 +150,17 @@ export async function resolveTestDriveServerPort(preferredPort = 3100, available
  * The selected credential source is preserved in case its name happens to use
  * a PAPERCLIP_ prefix; all other Paperclip routing/configuration is discarded.
  */
+const TEST_DRIVE_UNAVAILABLE_MESSAGE =
+  "Automatic test-drive setup is disabled in this security fork because it requires implicit local administrator access. " +
+  "Run paperclipai onboard --yes, then use normal browser sign-in.";
+
 export async function prepareTestDriveEnvironment(
-  options: Pick<TestDriveOptions, "dataDir" | "apiKeyEnv">,
-  cwd = process.cwd(),
+  _options: Pick<TestDriveOptions, "dataDir" | "apiKeyEnv">,
+  _cwd = process.cwd(),
 ): Promise<{ dataDir: string; linkedWorktree: boolean }> {
-  const sourceEnvName = options.apiKeyEnv?.trim();
-  const preservedCredential = sourceEnvName ? process.env[sourceEnvName] : undefined;
-
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith("PAPERCLIP_")) {
-      delete process.env[key];
-    }
-  }
-  for (const key of NON_PAPERCLIP_ISOLATED_ENV_KEYS) {
-    delete process.env[key];
-  }
-  if (sourceEnvName && preservedCredential !== undefined) {
-    process.env[sourceEnvName] = preservedCredential;
-  }
-
-  const dataDir = resolveTestDriveDataDir(options.dataDir);
-  const linkedWorktree = isLinkedGitWorktree(cwd);
-  process.env.PAPERCLIP_HOME = dataDir;
-  process.env.PAPERCLIP_INSTANCE_ID = "default";
-  process.env.PAPERCLIP_CONFIG = resolveDefaultConfigPath("default");
-  process.env.PAPERCLIP_CONTEXT = resolveDefaultContextPath();
-  process.env.PAPERCLIP_IN_WORKTREE = linkedWorktree ? "true" : "false";
-  process.env.PAPERCLIP_OPEN_ON_LISTEN = "false";
-  process.env.PAPERCLIP_DISABLE_CWD_ENV_FILE = "true";
-  process.env.PAPERCLIP_DEPLOYMENT_MODE = "local_trusted";
-  process.env.PAPERCLIP_DEPLOYMENT_EXPOSURE = "private";
-  process.env.PAPERCLIP_BIND = "loopback";
-  process.env.HOST = "127.0.0.1";
-  let preferredPort = 3100;
-  try {
-    preferredPort = readConfig(process.env.PAPERCLIP_CONFIG)?.server.port ?? preferredPort;
-  } catch {
-    // The normal startup doctor owns invalid-config diagnostics and repair.
-  }
-  // Reusing a test drive must preserve callback and enrollment origins when
-  // its saved port is available. Only move forward if that port is occupied.
-  process.env.PORT = String(await resolveTestDriveServerPort(preferredPort));
-
-  return { dataDir, linkedWorktree };
+  // Fail before environment changes, port probes, directories, or server setup.
+  // This also preserves the operator's telemetry opt-out without copying it.
+  throw new Error(TEST_DRIVE_UNAVAILABLE_MESSAGE);
 }
 
 export function assertTestDriveDatabaseIsolation(
@@ -406,94 +359,22 @@ export async function bootstrapTestDrive(input: {
   }
 }
 
-function dashboardUrl(server: StartedServer): string {
-  return server.apiUrl.replace(/\/api\/?$/, "");
-}
-
 export async function testDriveCommand(
   options: TestDriveOptions,
-  dependencies: TestDriveDependencies = {
+  _dependencies: TestDriveDependencies = {
     run: runCommand,
     createApi: (apiBase) => new PaperclipApiClient({ apiBase }),
     openBrowser: openUrl,
   },
 ): Promise<void> {
-  // Commander has already copied the value into options. Remove it from the
-  // JavaScript argv view before logging, telemetry, diagnostics, or startup.
   redactTestDriveArgv(options.apiKey);
-  const dataDir = path.resolve(process.env.PAPERCLIP_HOME ?? resolveTestDriveDataDir(options.dataDir));
-  const linkedWorktree = process.env.PAPERCLIP_IN_WORKTREE === "true";
-  const instanceId = process.env.PAPERCLIP_INSTANCE_ID ?? "default";
-  // Resolve environment-backed credentials against the CLI environment as it
-  // exists before server startup. In-process server initialization must not
-  // change which credential the post-listen bootstrap observes.
-  const bootstrapEnv = { ...process.env };
-  const possibleCredentials = [
-    options.apiKey,
-    options.apiKeyEnv ? bootstrapEnv[options.apiKeyEnv.trim()] : undefined,
-    bootstrapEnv[HARNESS_DEFINITIONS[options.harness ?? "claude"].credentialTarget],
-  ];
-
-  p.log.message(pc.dim(`Data directory: ${dataDir}`));
-  p.log.message(pc.dim("The data directory is retained when Paperclip exits."));
-  if (options.apiKey !== undefined) {
-    p.log.warn("A key passed with --api-key may be visible in process arguments and shell history.");
-  }
-
-  try {
-    await dependencies.run({
-      repair: true,
-      yes: true,
-      bind: "loopback",
-      installService: false,
-      // Auto-created directories are private to this process. Explicitly reused
-      // directories retain the normal guard against an already-managed instance.
-      skipServiceManagerCheck: !options.dataDir?.trim(),
-      introLabel: "paperclipai test-drive",
-      afterStart: async (server) => {
-        const api = dependencies.createApi(server.apiUrl);
-        const result = await bootstrapTestDrive({
-          api,
-          options,
-          linkedWorktree,
-          instanceId,
-          env: bootstrapEnv,
-        });
-        if (result.reused) {
-          p.log.message(
-            `Using existing data for ${pc.cyan(result.company.name)}; bootstrap flags were ignored.`,
-          );
-        } else {
-          p.log.success(
-            `Created ${pc.cyan(result.company.name)} with agent ${pc.cyan(result.agent?.name ?? "CEO")}.`,
-          );
-        }
-        if (linkedWorktree) {
-          p.log.success("Run tasks in this worktree is enabled for this instance.");
-        }
-
-        const url = dashboardUrl(server);
-        if (options.browser === false) {
-          p.log.success(`Paperclip is ready at ${pc.cyan(url)}.`);
-          return;
-        }
-        const opened = await dependencies.openBrowser(url);
-        if (opened) {
-          p.log.success(`Paperclip is ready and opened at ${pc.cyan(url)}.`);
-        } else {
-          p.log.warn(`Paperclip is ready, but the browser could not be opened. Visit ${url}.`);
-        }
-      },
-    });
-  } catch (error) {
-    throw new Error(redactTestDriveText(errorMessage(error), possibleCredentials), { cause: error });
-  }
+  throw new Error(TEST_DRIVE_UNAVAILABLE_MESSAGE);
 }
 
 export function registerTestDriveCommand(program: Command): void {
   program
     .command("test-drive")
-    .description("Start an isolated, initialized Paperclip instance for manual testing")
+    .description("Automatic test drive is disabled in this security fork; use onboard and browser sign-in")
     .option("-d, --data-dir <path>", "Paperclip data directory to create or reuse")
     .option("--company-name <name>", "Initial company name", "Test Company")
     .option("--agent-name <name>", "Initial CEO agent name", "CEO")

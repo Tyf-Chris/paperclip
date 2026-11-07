@@ -49,16 +49,16 @@
   },
   "dependencies": {
     "@paperclipai/shared": "workspace:*",
-    "drizzle-orm": "^0.45.2",
-    "embedded-postgres": "^18.1.0-beta.16",
+    "drizzle-orm": "^0.45.4",
+    "embedded-postgres": "18.1.0-beta.16",
     "postgres": "^3.4.9"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "drizzle-kit": "^0.31.10",
+    "@types/node": "^24.19.2",
+    "drizzle-kit": "^0.31.11",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.1.0"
   },
   "engines": {
     "node": ">=24.11.0"

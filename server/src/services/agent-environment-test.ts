@@ -19,6 +19,7 @@ import { validateAiApiKey } from "./ai-api-key-test.js";
 import { probeCopilotExecutionTarget } from "./copilot-connection-probe.js";
 import type { PluginWorkerManager } from "./plugin-worker-manager.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
+import { assertLegacyLocalAgentExecutionAllowed } from "./local-execution-policy.js";
 const asRecord = (value: unknown): Record<string, unknown> | null => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: PluginWorkerManager) {
   const instanceSettings = instanceSettingsService(db);
@@ -79,6 +80,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
     const noopRelease = async () => {};
 
     if (!input.environmentId) {
+      assertLegacyLocalAgentExecutionAllowed({ adapterType: input.adapterType, executionTarget: null });
       return {
         executionTarget: null,
         environmentName: null,
@@ -137,6 +139,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
       }
     }
 
+    assertLegacyLocalAgentExecutionAllowed({ adapterType: input.adapterType, environmentDriver: environment.driver });
     if (environment.driver === "local") {
       return {
         executionTarget: null,
@@ -490,6 +493,7 @@ export function agentEnvironmentTestService(db: Db, pluginWorkerManager?: Plugin
   }
 
   async function testManagedEnvironment(adapterType: string, context: Parameters<ReturnType<typeof requireServerAdapter>["testEnvironment"]>[0], binding: AiConnectionBinding, managed: Awaited<ReturnType<typeof prepareManagedAiRuntime>>, agentId?: string) {
+    assertLegacyLocalAgentExecutionAllowed({ adapterType, executionTarget: context.executionTarget ?? null });
     const startedAt = new Date();
     const target = context.executionTarget;
     if (managed.credentialWriteback && target?.kind === "remote" && target.transport === "sandbox" && target.runnerTask && target.leaseId) {

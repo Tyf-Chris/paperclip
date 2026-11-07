@@ -56,7 +56,7 @@ export function buildPresetServerConfig(
 
   return {
     server: {
-      deploymentMode: bind === "loopback" ? "local_trusted" : "authenticated",
+      deploymentMode: "authenticated",
       exposure: "private",
       bind,
       customBindHost: undefined,
@@ -145,7 +145,7 @@ export function resolveQuickstartServerConfig(input: {
 
   if (trimmedHost) {
     return buildCustomServerConfig({
-      deploymentMode: input.deploymentMode ?? (isLoopbackHost(trimmedHost) ? "local_trusted" : "authenticated"),
+      deploymentMode: input.deploymentMode ?? "authenticated",
       exposure: input.exposure ?? "private",
       host: trimmedHost,
       port: input.port,
@@ -168,7 +168,7 @@ export function resolveQuickstartServerConfig(input: {
       });
     }
 
-    return buildPresetServerConfig("lan", {
+    return buildPresetServerConfig("loopback", {
       port: input.port,
       allowedHostnames: input.allowedHostnames,
       serveUi: input.serveUi,

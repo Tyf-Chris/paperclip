@@ -154,7 +154,7 @@ export async function promptServer(opts?: {
   const defaultHost =
     currentServer?.customBindHost ??
     currentServer?.host ??
-    (deploymentMode === "local_trusted" ? "127.0.0.1" : "0.0.0.0");
+    "127.0.0.1";
   const host = await p.text({
     message: "Bind host",
     defaultValue: defaultHost,

@@ -5,17 +5,46 @@ function isLoopbackHostname(hostname: string): boolean {
   return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
 
-function extractHostname(req: Request): string | null {
-  const forwardedHost = req.header("x-forwarded-host")?.split(",")[0]?.trim();
-  const hostHeader = req.header("host")?.trim();
-  const raw = forwardedHost || hostHeader;
-  if (!raw) return null;
+function parseHost(value: string | undefined): string | null {
+  const raw = value?.trim();
+  // A Host is an authority, not a URL. Reject userinfo, paths, lists, and
+  // escaped delimiters before URL parsing can normalize them into a safe host.
+  if (!raw || !/^(?:\[[\da-f:.]+\]|[a-z\d._-]+)(?::\d+)?$/i.test(raw)) return null;
 
   try {
-    return new URL(`http://${raw}`).hostname.trim().toLowerCase();
+    const parsed = new URL(`http://${raw}`);
+    const explicitPort = /:(\d+)$/.exec(raw)?.[1];
+    // Keep an explicit port 80: the request may use HTTPS, whose default port
+    // differs from the HTTP URL used only to validate the authority here.
+    return parsed.hostname + (explicitPort === undefined ? "" : `:${Number(explicitPort)}`);
   } catch {
-    return raw.trim().toLowerCase();
+    return null;
   }
+}
+
+/** Use forwarded authority only when the operator trusts the immediate peer. */
+export function trustedRequestHost(req: Request): string | null {
+  const host = parseHost(req.header("host"));
+  if (!host) return null;
+
+  const remoteAddress = req.socket?.remoteAddress;
+  const trustProxy = req.app?.get("trust proxy fn") as
+    | ((address: string, hop: number) => boolean)
+    | undefined;
+  const forwardedHost = req.header("x-forwarded-host");
+  if (forwardedHost !== undefined && remoteAddress && typeof trustProxy === "function" && trustProxy(remoteAddress, 0)) {
+    // The trusted proxy must supply one authority. Do not accept a list that
+    // could retain a client-supplied value before a proxy's appended value.
+    return parseHost(forwardedHost);
+  }
+
+  return host;
+}
+
+function extractHostname(req: Request): string | null {
+  const host = trustedRequestHost(req);
+  if (!host) return null;
+  return new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, "").toLowerCase();
 }
 
 function normalizeAllowedHostnames(values: string[]): string[] {
@@ -69,10 +98,14 @@ export function privateHostnameGuard(opts: {
 
   return (req, res, next) => {
     const hostname = extractHostname(req);
+    const directHost = parseHost(req.header("host"));
+    const directHostname = directHost
+      ? new URL(`http://${directHost}`).hostname.replace(/^\[|\]$/g, "").toLowerCase()
+      : null;
     const wantsJson = req.path.startsWith("/api") || req.accepts(["json", "html", "text"]) === "json";
 
-    if (!hostname) {
-      const error = "Missing Host header. If you want to allow a hostname, run npx paperclipai allowed-hostname <host>.";
+    if (!hostname || !directHostname) {
+      const error = "Missing or invalid Host header. If you want to allow a hostname, run npx paperclipai allowed-hostname <host>.";
       if (wantsJson) {
         res.status(403).json({ error });
       } else {
@@ -81,7 +114,12 @@ export function privateHostnameGuard(opts: {
       return;
     }
 
-    if (isLoopbackHostname(hostname) || allowSet.has(hostname)) {
+    // A loopback proxy and a rebinding browser can share the same peer address.
+    // Forwarded authority must never promote an unapproved actual Host. A
+    // legitimate proxy must use an allowed upstream Host as well as an allowed
+    // forwarded hostname.
+    if ((isLoopbackHostname(directHostname) || allowSet.has(directHostname))
+      && (isLoopbackHostname(hostname) || allowSet.has(hostname))) {
       next();
       return;
     }

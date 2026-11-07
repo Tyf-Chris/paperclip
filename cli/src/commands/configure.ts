@@ -61,7 +61,7 @@ function defaultConfig(): PaperclipConfig {
       logDir: resolveDefaultLogsDir(instanceId),
     },
     server: {
-      deploymentMode: "local_trusted",
+      deploymentMode: "authenticated",
       exposure: "private",
       bind: "loopback",
       host: "127.0.0.1",
@@ -74,7 +74,7 @@ function defaultConfig(): PaperclipConfig {
       disableSignUp: false,
     },
     telemetry: {
-      enabled: true,
+      enabled: false,
     },
     storage: defaultStorageConfig(),
     secrets: defaultSecretsConfig(),

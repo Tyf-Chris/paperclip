@@ -247,6 +247,7 @@ export function buildWorktreeConfig(input: {
   const nowIso = (input.now ?? new Date()).toISOString();
 
   const source = sourceConfig;
+  const bind = source ? source.server.bind : "loopback";
   const authPublicBaseUrl = rewriteLocalUrlPort(source?.auth.publicBaseUrl, serverPort);
 
   return {
@@ -272,9 +273,9 @@ export function buildWorktreeConfig(input: {
       logDir: paths.logDir,
     },
     server: {
-      deploymentMode: source?.server.deploymentMode ?? "local_trusted",
+      deploymentMode: source?.server.deploymentMode ?? "authenticated",
       exposure: source?.server.exposure ?? "private",
-      ...(source?.server.bind ? { bind: source.server.bind } : {}),
+      ...(bind ? { bind } : {}),
       ...(source?.server.customBindHost ? { customBindHost: source.server.customBindHost } : {}),
       host: source?.server.host ?? "127.0.0.1",
       port: serverPort,
@@ -287,7 +288,7 @@ export function buildWorktreeConfig(input: {
       disableSignUp: source?.auth.disableSignUp ?? false,
     },
     telemetry: {
-      enabled: source?.telemetry?.enabled ?? true,
+      enabled: source?.telemetry?.enabled ?? false,
     },
     storage: {
       provider: source?.storage.provider ?? "local_disk",

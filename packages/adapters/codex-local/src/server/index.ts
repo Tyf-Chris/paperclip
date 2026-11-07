@@ -11,6 +11,7 @@ export {
 export * from "./acp.js";
 export { getConfigSchema } from "./config-schema.js";
 export {
+  assertLegacyCodexCredentialSelection,
   reconcileManagedCodexHome,
   isManagedCodexHomePath,
   resolveManagedCodexHomeDir,

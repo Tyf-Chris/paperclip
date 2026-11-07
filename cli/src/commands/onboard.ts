@@ -170,17 +170,17 @@ function describeServerBinding(server: Pick<PaperclipConfig["server"], "bind" | 
   return `${bind}${detail ? ` (${detail})` : ""}:${server.port}`;
 }
 
-function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
+function quickstartDefaultsFromEnv(opts?: { preferAuthenticatedLoopback?: boolean }): {
   defaults: OnboardDefaults;
   usedEnvKeys: string[];
   ignoredEnvKeys: Array<{ key: string; reason: string }>;
 } {
-  const preferTrustedLocal = opts?.preferTrustedLocal ?? false;
+  const preferAuthenticatedLoopback = opts?.preferAuthenticatedLoopback ?? false;
   const instanceId = resolvePaperclipInstanceId();
   const defaultStorage = defaultStorageConfig();
   const defaultSecrets = defaultSecretsConfig();
   const databaseUrl = process.env.DATABASE_URL?.trim() || undefined;
-  const publicUrl = preferTrustedLocal
+  const publicUrl = preferAuthenticatedLoopback
     ? undefined
     : (
       process.env.PAPERCLIP_PUBLIC_URL?.trim() ||
@@ -189,9 +189,9 @@ function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
       process.env.BETTER_AUTH_BASE_URL?.trim() ||
       undefined
     );
-  const deploymentMode = preferTrustedLocal
-    ? "local_trusted"
-    : (parseEnumFromEnv<DeploymentMode>(process.env.PAPERCLIP_DEPLOYMENT_MODE, DEPLOYMENT_MODES) ?? "local_trusted");
+  const deploymentMode = preferAuthenticatedLoopback
+    ? "authenticated"
+    : (parseEnumFromEnv<DeploymentMode>(process.env.PAPERCLIP_DEPLOYMENT_MODE, DEPLOYMENT_MODES) ?? "authenticated");
   const deploymentExposureFromEnv = parseEnumFromEnv<DeploymentExposure>(
     process.env.PAPERCLIP_DEPLOYMENT_EXPOSURE,
     DEPLOYMENT_EXPOSURES,
@@ -202,12 +202,12 @@ function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
   const customBindHostFromEnv = process.env.PAPERCLIP_BIND_HOST?.trim() || undefined;
   const hostFromEnv = process.env.HOST?.trim() || undefined;
   const configuredBindHost = customBindHostFromEnv ?? hostFromEnv;
-  const bind = preferTrustedLocal
+  const bind = preferAuthenticatedLoopback
     ? "loopback"
     : (
       deploymentMode === "local_trusted"
         ? "loopback"
-        : (bindFromEnv ?? (configuredBindHost ? inferBindModeFromHost(configuredBindHost) : "lan"))
+        : (bindFromEnv ?? (configuredBindHost ? inferBindModeFromHost(configuredBindHost) : "loopback"))
     );
   const resolvedBind = resolveRuntimeBind({
     bind,
@@ -310,8 +310,8 @@ function quickstartDefaultsFromEnv(opts?: { preferTrustedLocal?: boolean }): {
     },
   };
   const ignoredEnvKeys: Array<{ key: string; reason: string }> = [];
-  if (preferTrustedLocal) {
-    const forcedLocalReason = "Ignored because --yes quickstart forces trusted local loopback defaults";
+  if (preferAuthenticatedLoopback) {
+    const forcedLocalReason = "Ignored because --yes quickstart requires authenticated loopback defaults";
     for (const key of [
       "PAPERCLIP_DEPLOYMENT_MODE",
       "PAPERCLIP_DEPLOYMENT_EXPOSURE",
@@ -554,7 +554,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
 
   let llm: PaperclipConfig["llm"] | undefined;
   const { defaults: derivedDefaults, usedEnvKeys, ignoredEnvKeys } = quickstartDefaultsFromEnv({
-    preferTrustedLocal: opts.yes === true && !opts.bind,
+    preferAuthenticatedLoopback: opts.yes === true && !opts.bind,
   });
   let {
     database,
@@ -710,7 +710,7 @@ export async function onboard(opts: OnboardOptions): Promise<void> {
     server,
     auth,
     telemetry: {
-      enabled: true,
+      enabled: false,
     },
     storage,
     secrets,

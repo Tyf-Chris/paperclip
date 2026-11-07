@@ -2,6 +2,7 @@ import { ACPX_DRIVER_KIND, ACPX_DRIVER_PROTOCOL_VERSION, QUALIFIED_ACPX_VERSION,
 export { ACPX_DRIVER_KIND, ACPX_DRIVER_PROTOCOL_VERSION, QUALIFIED_ACPX_VERSION } from "./generated-profiles.js";
 
 import type { NativeAcpxAgent, NativeAcpxProfileSnapshot } from "../../contracts/native-execution.js";
+import { assertPiRuntimeAvailable } from "./pi-security-policy.js";
 
 export type QualifiedAcpxAgent = NativeAcpxAgent;
 
@@ -41,6 +42,7 @@ export function resolveQualifiedAcpxProfile(
   agent: QualifiedAcpxAgent,
   requestedModel: string,
 ): QualifiedAcpxProfile {
+  if (agent === "pi") assertPiRuntimeAvailable();
   const profile = QUALIFIED_ACPX_PROFILES[agent];
   if (!requestedModel.trim()) throw new Error("ACPX model must not be empty");
   if (agent === "copilot" && ["auto", "default"].includes(requestedModel.trim().toLowerCase())) throw new Error("Copilot requires an explicit model ID");

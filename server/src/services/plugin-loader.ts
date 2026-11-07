@@ -51,6 +51,7 @@ import type { PluginToolDispatcher } from "./plugin-tool-dispatcher.js";
 import type { PluginLifecycleManager } from "./plugin-lifecycle.js";
 import { pluginDatabaseService } from "./plugin-database.js";
 import { resolveBundledCatalogRoot } from "./bundled-plugins.js";
+import { assertUnsandboxedPluginExecutionAllowed } from "./plugin-execution-policy.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -901,6 +902,7 @@ export async function ensureLocalPluginBuilt(
   const manualBuildCommand = buildLocalPluginRecoveryCommand(packageRoot, pkgJson, { repoRoot: options.repoRoot });
   if (typeof packageName !== "string" || packageName.trim().length === 0 || !manualBuildCommand) return;
 
+  assertUnsandboxedPluginExecutionAllowed();
   const runExecFileAsync = options.execFileAsyncImpl ?? execFileAsync;
   const buildCommands = buildLocalPluginBuildCommands(packageRoot, pkgJson, {
     repoRoot: options.repoRoot,
@@ -1350,6 +1352,7 @@ export function pluginLoader(
   async function loadManifestFromPath(
     manifestPath: string,
   ): Promise<PaperclipPluginManifestV1> {
+    assertUnsandboxedPluginExecutionAllowed();
     let raw: unknown;
 
     try {

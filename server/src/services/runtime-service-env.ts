@@ -1,14 +1,15 @@
 export function sanitizeRuntimeServiceBaseEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("PAPERCLIP_")) {
-      delete env[key];
+  // Commands receive only basic process settings. Credentials must come from
+  // the authorized workspace bindings, never the server's ambient environment.
+  const allowed = new Set([
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP",
+    "LANG", "TERM", "COLORTERM", "TZ", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+  ]);
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (allowed.has(key) || /^LC_[A-Z_]+$/.test(key)) {
+      env[key] = value;
     }
   }
-  delete env.BETTER_AUTH_URL;
-  delete env.BETTER_AUTH_BASE_URL;
-  delete env.DATABASE_URL;
-  delete env.npm_config_tailscale_auth;
-  delete env.npm_config_authenticated_private;
   return env;
 }

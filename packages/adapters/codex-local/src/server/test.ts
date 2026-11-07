@@ -25,16 +25,11 @@ import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 import { codexHomeDir, readCodexAuthInfo } from "./quota.js";
 import { buildCodexExecArgs } from "./codex-args.js";
 import {
+  assertLegacyCodexCredentialSelection,
   isManagedCodexHomePath,
   prepareManagedCodexHome,
-  resolveSharedCodexHomeDir,
   seedManagedCodexHome,
 } from "./codex-home.js";
-import {
-  isCodexAuthCacheEnabled,
-  resolveCodexAuthCacheEntryPath,
-  selectVendCredential,
-} from "./codex-auth-cache.js";
 import { resolveCodexExecutionEngineForRun, testCodexAcpEnvironment } from "./acp.js";
 import { ADAPTER_AUTH_MISSING_CHECK_CODE } from "./auth-check.js";
 import { checkCodexCliVersionForModel, codexHelloProbeModelRejectionCheck } from "./cli-version.js";
@@ -108,12 +103,9 @@ async function prepareCodexHelloProbe(input: {
   };
 
   if (input.targetIsRemote && !input.probeApiKey) {
-    // Prepare the exact home a real run would use, mirroring execute.ts: vend
-    // the shared credential's freshest same-identity cached copy, then seed the
-    // effective home — the company default when no CODEX_HOME is configured, a
-    // Paperclip-managed override (the per-agent home) seeded in place — and
-    // stage that home's credentials. A genuine external override manages its
-    // own auth: its bytes are staged as-is and it is never seeded or mutated.
+    // Stage the explicitly selected account used by a real run. Managed
+    // homes do not import the operator's login or settings; external homes
+    // manage their own auth and are not seeded or mutated.
     // Without this mirror the probe exercises a different credential than the
     // run, and the Test and real runs can disagree in both directions.
     const configuredCodexHome = isNonEmpty(input.env.CODEX_HOME)
@@ -122,26 +114,19 @@ async function prepareCodexHelloProbe(input: {
     const configuredHomeIsManaged =
       configuredCodexHome != null &&
       isManagedCodexHomePath(process.env, input.companyId, configuredCodexHome);
-    if (!input.managedAiConnection && isCodexAuthCacheEnabled(process.env)) {
-      // Identity-anchored cache vend, exactly as execute runs it before the
-      // seeding below. Best-effort: a vend failure never blocks the probe, and
-      // the probe then stages the shared credential as-is.
-      const sharedHomeAuthPath = path.join(resolveSharedCodexHomeDir(process.env), "auth.json");
-      await selectVendCredential(
-        sharedHomeAuthPath,
-        (accountId) => resolveCodexAuthCacheEntryPath(process.env, accountId, input.companyId),
-        async () => {},
-      ).catch(() => undefined);
-    }
     let effectiveHome: string;
     if (configuredCodexHome == null) {
       effectiveHome = await prepareManagedCodexHome(process.env, async () => {}, input.companyId, {
         apiKey: null,
+        seedAuthFromSource: false,
+        seedConfigFromSource: false,
       });
     } else {
       if (configuredHomeIsManaged) {
         await seedManagedCodexHome(configuredCodexHome, process.env, async () => {}, {
           apiKey: null,
+          seedAuthFromSource: false,
+          seedConfigFromSource: false,
         });
       }
       effectiveHome = configuredCodexHome;
@@ -158,8 +143,7 @@ async function prepareCodexHelloProbe(input: {
     let seededAuth = false;
     let seededConfig = false;
     for (const file of ["auth.json", "config.toml"]) {
-      // `fs.readFile` follows the home's `auth.json` symlink into the host's
-      // `~/.codex`, so we copy the resolved bytes as a plain file.
+      // Account-home symlinks are resolved into private staged file bytes.
       const contents = await fs.readFile(path.join(effectiveHome, file)).catch(() => null);
       if (contents) {
         await fs.writeFile(path.join(probeHomeLocalDir, file), contents);
@@ -251,6 +235,14 @@ async function prepareCodexHelloProbe(input: {
 export async function testEnvironment(
   ctx: AdapterEnvironmentTestContext,
 ): Promise<AdapterEnvironmentTestResult> {
+  try {
+    await assertLegacyCodexCredentialSelection(parseObject(ctx.config), process.env, ctx.companyId);
+  } catch (error) {
+    return {
+      adapterType: "codex_local", status: "fail", testedAt: new Date().toISOString(),
+      checks: [{ code: ADAPTER_AUTH_MISSING_CHECK_CODE, level: "error", message: (error as Error).message }],
+    };
+  }
   const engineSelection = await resolveCodexExecutionEngineForRun({
     config: parseObject(ctx.config),
     executionTarget: ctx.executionTarget,
@@ -315,7 +307,7 @@ export async function testEnvironment(
   }
 
   const envConfig = parseObject(config.env);
-  const env: Record<string, string> = {};
+  const env: Record<string, string> = { OPENAI_API_KEY: "", CODEX_API_KEY: "" };
   for (const [key, value] of Object.entries(envConfig)) {
     if (typeof value === "string") env[key] = value;
   }
@@ -345,22 +337,19 @@ export async function testEnvironment(
     });
   }
 
-  const configOpenAiKey = env.OPENAI_API_KEY;
-  const hostOpenAiKey = targetIsRemote || Object.hasOwn(env, "OPENAI_API_KEY")
-    ? undefined : process.env.OPENAI_API_KEY;
+  const configOpenAiKey = env.OPENAI_API_KEY || env.CODEX_API_KEY;
   if (config.managedAiRouting) {
     checks.push({
       code: "codex_managed_provider_configured",
       level: "info",
       message: "Testing the selected connection’s provider and model.",
     });
-  } else if (isNonEmpty(configOpenAiKey) || isNonEmpty(hostOpenAiKey)) {
-    const source = isNonEmpty(configOpenAiKey) ? "adapter config env" : "server environment";
+  } else if (isNonEmpty(configOpenAiKey)) {
     checks.push({
       code: "codex_openai_api_key_present",
       level: "info",
       message: "OPENAI_API_KEY is set for Codex authentication.",
-      detail: `Detected in ${source}.`,
+      detail: "Detected in adapter config env.",
     });
   } else if (!targetIsRemote) {
     // Local-only auth file check. On remote targets, the probe will surface
@@ -463,9 +452,7 @@ export async function testEnvironment(
       // Replacing that home with a native-key probe would test another provider.
       const probeApiKey = config.managedAiConnection ? null : isNonEmpty(configOpenAiKey)
         ? configOpenAiKey
-        : isNonEmpty(hostOpenAiKey)
-          ? hostOpenAiKey
-          : null;
+        : null;
       const preparedProbe = await prepareCodexHelloProbe({
         managedAiConnection: Boolean(config.managedAiConnection),
         runId,

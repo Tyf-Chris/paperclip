@@ -12,10 +12,7 @@ import { buildCodexAuthInboundProvision } from "./codex-auth-merge-scripts.js";
 import { copyBackCodexAuth } from "./codex-auth-copyback.js";
 import {
   ensureCodexAuthCacheEntryDir,
-  isCodexAuthCacheEnabled,
   readSubscriptionAccountId,
-  resolveCodexAuthCacheEntryPath,
-  selectVendCredential,
 } from "./codex-auth-cache.js";
 import {
   adapterExecutionTargetIsRemote,
@@ -76,6 +73,7 @@ import {
   isCodexUnknownSessionError,
 } from "./parse.js";
 import {
+  assertLegacyCodexCredentialSelection,
   codexHomeHasUsableAuth,
   evaluateCodexCredentialReadiness,
   isManagedCodexHomePath,
@@ -435,15 +433,14 @@ export async function assertCodexCredentialsLaunchable(input: {
       `no Codex credentials provisioned for managed home "${input.effectiveCodexHome}" ` +
         `(no usable auth.json, OPENAI_API_KEY is empty, and the sandbox has no Codex login). ` +
         `Use a sandbox image that is signed in to Codex, configure a per-agent OPENAI_API_KEY, ` +
-        `or sign in to Codex on the host with a ChatGPT subscription.`,
+        `or select a dedicated Codex account connection.`,
     );
   }
 
   throw new Error(
     `no Codex credentials provisioned for managed home "${input.effectiveCodexHome}" ` +
       `(no usable auth.json and OPENAI_API_KEY is empty). ` +
-      `Sign in to Codex on the host with a ChatGPT subscription, or configure a per-agent ` +
-      `OPENAI_API_KEY.`,
+      `Select a dedicated account connection or configure a per-agent OPENAI_API_KEY.`,
   );
 }
 
@@ -576,6 +573,7 @@ export async function ensureCodexSkillsInjected(
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
+  await assertLegacyCodexCredentialSelection(ctx.config, process.env, ctx.agent.companyId);
   const providerStop = createProviderStoppedBoundary(ctx.onProviderStopped);
   const engineSelection = await resolveCodexExecutionEngineForRun(ctx);
   if (engineSelection.unavailableReason) {
@@ -651,7 +649,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const configuredOpenAiApiKey =
     typeof envConfig.OPENAI_API_KEY === "string" && envConfig.OPENAI_API_KEY.trim().length > 0
       ? envConfig.OPENAI_API_KEY.trim()
-      : null;
+      : typeof envConfig.CODEX_API_KEY === "string" && envConfig.CODEX_API_KEY.trim().length > 0
+        ? envConfig.CODEX_API_KEY.trim() : null;
   const skillSourceHome = configuredCodexHome;
   const connectorSkillDigest = typeof config.paperclipConnectorSkillDigest === "string"
     && /^[a-f0-9]{64}$/.test(config.paperclipConnectorSkillDigest) ? config.paperclipConnectorSkillDigest : null;
@@ -668,7 +667,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     })).digest("hex")
     : connectorSkillDigest;
   const runtimeCredentialHome = runtimeSkillDigest
-    ? skillSourceHome ?? await prepareManagedCodexHome(process.env, onLog, agent.companyId, { apiKey: configuredOpenAiApiKey })
+    ? skillSourceHome ?? await prepareManagedCodexHome(process.env, onLog, agent.companyId, {
+        apiKey: configuredOpenAiApiKey, seedAuthFromSource: false, seedConfigFromSource: false,
+      })
     : null;
   if (runtimeSkillDigest) {
     const credentialHome = runtimeCredentialHome!;
@@ -692,43 +693,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (!executionTargetIsRemote) {
     await ensureAbsoluteDirectory(cwd, { createIfMissing: true });
   }
-  // A configured CODEX_HOME that lives under the Paperclip-managed company tree
-  // (the per-agent home set by the server isolation guard) still needs auth
-  // seeded — it ships with no credentials and OPENAI_API_KEY="" by default.
-  // Only a genuine external/user-supplied override is treated as self-managed
-  // and left untouched.
+  // Paperclip-owned homes can receive the selected API key. Derived skill
+  // homes can also receive the explicitly selected account/configuration.
+  // Neither path imports the operator's ambient Codex login or settings.
   const configuredHomeIsManaged =
     configuredCodexHome != null &&
     isManagedCodexHomePath(process.env, agent.companyId, configuredCodexHome);
-  // Identity-anchored cache vend (host to sandbox). Before the managed home is
-  // seeded from the shared source `auth.json`, refresh the shared credential with
-  // a strictly-newer cached copy of the SAME identity. The vend reads the host
-  // identity first and resolves only that identity's cache slot; when the host
-  // holds no credential it does nothing (no random pick). This keeps the change
-  // additive: the managed home still symlinks the shared `auth.json`, now at its
-  // freshest same-identity copy. The off-switch (default on) skips the vend.
-  if (!config.managedAiConnection && isCodexAuthCacheEnabled(process.env)) {
-    const sharedHomeAuthPath = path.join(resolveSharedCodexHomeDir(process.env), "auth.json");
-    // This caller reads `process.env` directly and holds no separate `env`
-    // object, so `selectVendCredential` falls back to its own `process.env`
-    // default for the merge lock root.
-    await selectVendCredential(
-      sharedHomeAuthPath,
-      (accountId) => resolveCodexAuthCacheEntryPath(process.env, accountId, agent.companyId),
-      (line) => onLog("stdout", `${line}\n`),
-    ).catch(async (error) => {
-      // The vend is best-effort and additive. A vend failure must never block a
-      // run: log and fall through to seed from the unrefreshed shared credential.
-      await onLog(
-        "stderr",
-        `[paperclip] Codex auth cache: vend skipped after an error; using the shared credential as-is.\n`,
-      );
-      void error;
-    });
-  }
   if (configuredCodexHome == null) {
     await prepareManagedCodexHome(process.env, onLog, agent.companyId, {
       apiKey: configuredOpenAiApiKey,
+      seedAuthFromSource: false,
+      seedConfigFromSource: false,
     });
   }
   if (configuredHomeIsManaged && configuredCodexHome) {
@@ -737,6 +712,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     } : process.env;
     await seedManagedCodexHome(configuredCodexHome, seedEnv, onLog, {
       apiKey: configuredOpenAiApiKey,
+      // Only derived skill homes copy the explicitly selected credential home.
+      seedAuthFromSource: Boolean(runtimeSkillDigest),
+      seedConfigFromSource: Boolean(runtimeSkillDigest),
     });
   }
   const defaultCodexHome = resolveManagedCodexHomeDir(process.env, agent.companyId);
@@ -885,16 +863,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
                 // Outbound (sandbox→host) auth copy-back contribution: at
                 // teardown, read the sandbox's `auth.json` and — guarded by the
                 // same direction-agnostic decision predicate under a directory
-                // lock — atomically install it onto the shared host credential
+                // lock — atomically install it onto the selected credential
                 // when it is a strictly-newer same-identity subscription copy.
                 // The sandbox core stays adapter-agnostic; it just awaits this
                 // generic `restore` seam per asset before destroying the sandbox.
-                // Target is the shared symlink SOURCE (what managed homes point
-                // `auth.json` at), not the in-sandbox symlink.
+                // The target is the selected credential home, never the
+                // operator's ambient Codex home or an in-sandbox symlink.
                 restore: async ({ assetDir, readFile }) =>
                   void (await copyBackCodexAuth({
                     readSandboxAuth: () => readFile(path.posix.join(assetDir, "auth.json")),
-                    hostAuthPath: path.join(config.managedAiConnection ? effectiveCodexHome : resolveSharedCodexHomeDir(process.env), "auth.json"),
+                    hostAuthPath: path.join(runtimeCredentialHome ?? effectiveCodexHome, "auth.json"),
                     log: (line) => onLog("stdout", `${line}\n`),
                     // Additive cache write (sandbox to host): also cache the
                     // sandbox subscription credential in its per-identity slot,
@@ -936,7 +914,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       onLog,
       onEvent,
     });
-    const env: Record<string, string> = { ...paperclipBaseEnv };
+    // Dedicated account runs must not switch to an ambient server API key.
+    const env: Record<string, string> = { OPENAI_API_KEY: "", CODEX_API_KEY: "", ...paperclipBaseEnv };
     env.PAPERCLIP_RUN_ID = runId;
     const wakeTaskId =
       (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||

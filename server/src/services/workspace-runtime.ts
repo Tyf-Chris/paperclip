@@ -5,6 +5,7 @@ import { applyGitRestorePointToWorktree, ensureGitRestorePointCommit } from "./g
 import { getStorageService } from "../storage/index.js";
 import type { StorageService } from "../storage/types.js";
 import { sanitizeRuntimeServiceBaseEnv } from "./runtime-service-env.js";
+import { assertHostWorkspaceCommandsAllowed } from "./local-execution-policy.js";
 import { verifiedRecordedIsolatedRemoteSource } from "./isolated-remote-workspace-source.js";
 export { sanitizeRuntimeServiceBaseEnv } from "./runtime-service-env.js";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
@@ -909,13 +910,17 @@ async function executeProcess(input: {
   };
 }
 
+// Internal Git metadata operations must not execute mutable repository hooks.
+// This is per invocation and does not change repository or user configuration.
+const WORKSPACE_GIT_HOOK_ARGS = ["-c", "core.hooksPath=/dev/null"];
+
 async function runGit(args: string[], cwd: string, opts?: {
   env?: NodeJS.ProcessEnv;
   observe?: (result: Awaited<ReturnType<typeof executeProcess>>) => void;
 }): Promise<string> {
   const proc = await executeProcess({
     command: "git",
-    args,
+    args: [...WORKSPACE_GIT_HOOK_ARGS, ...args],
     cwd,
     env: opts?.env,
   });
@@ -1371,7 +1376,7 @@ async function getGitWorktreeBranchAncestryVerdict(input: {
 
   const proc = await executeProcess({
     command: "git",
-    args: ["merge-base", "--is-ancestor", input.expectedHeadSha, input.actualHeadSha],
+    args: [...WORKSPACE_GIT_HOOK_ARGS, "merge-base", "--is-ancestor", input.expectedHeadSha, input.actualHeadSha],
     cwd: input.repoRoot,
   }).catch(() => null);
   if (!proc) return "unknown";
@@ -2754,7 +2759,7 @@ async function readAdvertisedDefaultBranch(repoRoot: string, resolveGitAuth?: Gi
     const remoteUrl = await runGit(["remote", "get-url", "origin"], repoRoot);
     const auth = resolveGitAuth ? await resolveGitAuth(remoteUrl) : null;
     const output = await new Promise<string>((resolve, reject) => {
-      execFile("git", [...(auth?.configArgs ?? []), "ls-remote", "--symref", "origin", "HEAD"], {
+      execFile("git", [...(auth?.configArgs ?? []), ...WORKSPACE_GIT_HOOK_ARGS, "ls-remote", "--symref", "origin", "HEAD"], {
         cwd: repoRoot, timeout: 10_000, maxBuffer: 64 * 1024,
         env: { ...process.env, ...auth?.env, GIT_TERMINAL_PROMPT: "0" },
       }, (error, stdout) => error ? reject(error) : resolve(stdout));
@@ -2817,7 +2822,7 @@ async function listLinkedGitWorktreePaths(repoRoot: string): Promise<
 > {
   let proc: Awaited<ReturnType<typeof executeProcess>>;
   try {
-    proc = await executeProcess({ command: "git", args: ["worktree", "list", "--porcelain"], cwd: repoRoot });
+    proc = await executeProcess({ command: "git", args: [...WORKSPACE_GIT_HOOK_ARGS, "worktree", "list", "--porcelain"], cwd: repoRoot });
   } catch (error) {
     return { diagnostic: readManagedGitInspectionDiagnostic({
       command: "worktree_list", failure: "spawn_failed", errorCode: (error as NodeJS.ErrnoException)?.code,
@@ -2986,7 +2991,7 @@ function buildWorkspaceCommandEnv(input: {
   agent: ExecutionWorkspaceAgentRef;
   created: boolean;
 }) {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env: NodeJS.ProcessEnv = sanitizeRuntimeServiceBaseEnv(process.env);
   env.PAPERCLIP_WORKSPACE_CWD = input.worktreePath;
   env.PAPERCLIP_WORKSPACE_PATH = input.worktreePath;
   env.PAPERCLIP_WORKSPACE_WORKTREE_PATH = input.worktreePath;
@@ -3070,6 +3075,7 @@ async function runWorkspaceCommand(input: {
   label: string;
   onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
 }) {
+  assertHostWorkspaceCommandsAllowed();
   const shell = resolveShell();
   const proc = await executeProcess({
     command: shell,
@@ -3116,7 +3122,7 @@ async function recordGitOperation(
     run: async () => {
       const result = await executeProcess({
         command: "git",
-        args: input.args,
+        args: [...WORKSPACE_GIT_HOOK_ARGS, ...input.args],
         cwd: input.cwd,
       });
       stdout = result.stdout;
@@ -3166,6 +3172,7 @@ async function recordWorkspaceCommandOperation(
     onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void>;
   },
 ) {
+  assertHostWorkspaceCommandsAllowed();
   if (!recorder) {
     await runWorkspaceCommand(input);
     return null;
@@ -3180,6 +3187,7 @@ async function recordWorkspaceCommandOperation(
     cwd: input.cwd,
     metadata: input.metadata ?? null,
     run: async () => {
+      assertHostWorkspaceCommandsAllowed();
       const shell = resolveShell();
       const result = await executeProcess({
         command: shell,
@@ -6173,6 +6181,7 @@ function createProvisioningRuntimeServiceRecord(
 }
 
 async function spawnLocalRuntimeService(input: StartLocalRuntimeServiceInput): Promise<LocalRuntimeServiceStart> {
+  assertHostWorkspaceCommandsAllowed();
   const leaseRunId = input.leaseRunId === undefined ? input.runId : input.leaseRunId;
   const startedByRunId = input.startedByRunId === undefined ? input.runId : input.startedByRunId;
   const identity = resolveRuntimeServiceReuseIdentity({

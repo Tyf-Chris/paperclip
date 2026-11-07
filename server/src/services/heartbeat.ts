@@ -16,6 +16,12 @@ import { createHeartbeatRunOutput } from "./heartbeat/run-output.js";
 import { prepareHeartbeatSession, resolveHeartbeatAdapterSession } from "./heartbeat/session-preparation.js";
 import { prepareHeartbeatTaskContext } from "./heartbeat/task-context.js";
 import { selectHeartbeatEnvironment } from "./heartbeat/environment-selection.js";
+import {
+  assertLegacyLocalAgentExecutionAllowed,
+  legacyLocalAgentExecutionAllowed,
+  LEGACY_LOCAL_EXECUTION_DISABLED_CODE,
+  LEGACY_LOCAL_EXECUTION_DISABLED_MESSAGE,
+} from "./local-execution-policy.js";
 import { reconcileMuseNativeTerminalRun } from "./native-runtime/muse-terminal-reconciliation.js";
 import { prepareHeartbeatWorkspace } from "./heartbeat/workspace-preparation.js";
 import { executeHeartbeatRuntime, NativeSessionResumeScheduledError, NativeWorkspaceFinalizeScheduledError } from "./heartbeat/runtime-execution.js";
@@ -2607,6 +2613,13 @@ export function heartbeatService(
         services: { executionWorkspacesSvc, environmentsSvc, instanceSettings, findSharedWorkspaceHolder, findExecutionWorkspaceHolder },
       }));
       let nativeChatExpectedCwd = selectedNativeChatExpectedCwd;
+      // Deny legacy host execution before credential preparation, workspace
+      // realization, or provision/runtime commands can have side effects.
+      if (!legacyLocalAgentExecutionAllowed({ adapterType: agent.adapterType, environmentDriver: selectedEnvironmentForConfig?.driver })) {
+        throw new ConfigurationIncompleteFailure(LEGACY_LOCAL_EXECUTION_DISABLED_MESSAGE, {
+          configurationIncomplete: { reason: LEGACY_LOCAL_EXECUTION_DISABLED_CODE, actionUrl: `/agents/${agent.id}/runtime` },
+        });
+      }
       const executionConfiguration = await timePreparation("execution_configuration", () => prepareHeartbeatExecutionConfiguration(db, {
         run, agent,
         task: { issueId, context, responsibleUserId, acceptedPlanContinuationWake, acceptedPlanWakeRoutingDecision, taskProjectContext, routineEnvContext },
@@ -2722,6 +2735,7 @@ export function heartbeatService(
           appendRunEvent,
         },
       }));
+      assertLegacyLocalAgentExecutionAllowed({ adapterType: agent.adapterType, executionTarget });
       const preparedInstructions = instructionWorkingCopy = createHeartbeatInstructionWorkingCopy({
         observabilityCompatibilityKey: observability?.compatibilityKey,
         db, instructionCopies, readRun: () => run!, agent, context,

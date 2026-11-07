@@ -172,9 +172,9 @@ RUN mkdir -p /provider-pack /provider-pack-transport \
 FROM base AS production
 ARG USER_UID=1000
 ARG USER_GID=1000
-# Refreshes the tool layer below when it changes (CI stamps an ISO week, so
-# the @latest CLI tools advance weekly). Without it the cached layer would
-# freeze the tools until an unrelated cache bust.
+# Refresh the OS package layer without changing the reviewed CLI versions.
+# Update the CLI pins explicitly after review. Codex and OpenCode match the
+# runner package; Claude, Gemini and Kimi match the qualified sandbox image.
 ARG CLI_TOOLS_CACHE_EPOCH=""
 WORKDIR /app
 # Tool and OS layer BEFORE the app copy: it references nothing from /app, and
@@ -182,7 +182,12 @@ WORKDIR /app
 # (the single most expensive layer: four CLI toolchains + apt, per arch) can
 # never hit the layer cache and rebuilds on every build.
 RUN echo "cli-tools-epoch: ${CLI_TOOLS_CACHE_EPOCH}" \
-  && npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai @google/gemini-cli@latest @moonshot-ai/kimi-code@latest \
+  && npm install --global --omit=dev --registry=https://registry.npmjs.org \
+    @anthropic-ai/claude-code@2.1.286 \
+    @openai/codex@0.160.0 \
+    opencode-ai@1.18.34 \
+    @google/gemini-cli@0.62.0 \
+    @moonshot-ai/kimi-code@2.1.1 \
   && apt-get update \
   && apt-get install -y --no-install-recommends openssh-client jq \
   && rm -rf /var/lib/apt/lists/* \

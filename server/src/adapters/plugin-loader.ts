@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import type { ServerAdapterModule } from "./types.js";
 import { validateAdapterLoginCapability } from "@paperclipai/adapter-utils";
 import { logger } from "../middleware/logger.js";
+import { assertUnsandboxedPluginExecutionAllowed } from "../services/plugin-execution-policy.js";
 
 import {
   listAdapterPlugins,
@@ -30,6 +31,7 @@ import type { AdapterPluginRecord } from "../services/adapter-plugin-store.js";
 const uiParserCache = new Map<string, string>();
 
 export function getUiParserSource(adapterType: string): string | undefined {
+  assertUnsandboxedPluginExecutionAllowed();
   return uiParserCache.get(adapterType);
 }
 
@@ -38,6 +40,7 @@ export function getUiParserSource(adapterType: string): string | undefined {
  * Makes the ui-parser.js endpoint self-healing.
  */
 export function getOrExtractUiParserSource(adapterType: string): string | undefined {
+  assertUnsandboxedPluginExecutionAllowed();
   const cached = uiParserCache.get(adapterType);
   if (cached) return cached;
 
@@ -182,6 +185,7 @@ export async function loadExternalAdapterPackage(
   packageName: string,
   localPath?: string,
 ): Promise<ServerAdapterModule> {
+  assertUnsandboxedPluginExecutionAllowed();
   const packageDir = localPath
     ? path.resolve(localPath)
     : path.resolve(getAdapterPluginsDir(), "node_modules", packageName);
@@ -221,6 +225,7 @@ async function loadFromRecord(record: AdapterPluginRecord): Promise<ServerAdapte
 export async function reloadExternalAdapter(
   type: string,
 ): Promise<ServerAdapterModule | null> {
+  assertUnsandboxedPluginExecutionAllowed();
   const record = getAdapterPluginByType(type);
   if (!record) return null;
 

@@ -1,4 +1,5 @@
 import type { TelemetryBackoffConfig, TelemetryConfig } from "./types.js";
+import { TELEMETRY_ENABLED_BY_DEFAULT } from "./generated/paperclip-telemetry.js";
 
 const CI_ENV_VARS = ["CI", "CONTINUOUS_INTEGRATION", "BUILD_NUMBER", "GITHUB_ACTIONS", "GITLAB_CI"];
 
@@ -77,7 +78,7 @@ export function resolveTelemetryConfig(
   if (isCI()) {
     return { enabled: false, ...caps };
   }
-  if (fileConfig?.enabled === false) {
+  if (!(fileConfig?.enabled ?? TELEMETRY_ENABLED_BY_DEFAULT)) {
     return { enabled: false, ...caps };
   }
 

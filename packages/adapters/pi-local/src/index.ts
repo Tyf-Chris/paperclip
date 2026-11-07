@@ -1,7 +1,19 @@
 export const type = "pi_local";
 export const label = "Pi";
 
-export const SANDBOX_INSTALL_COMMAND = "npm install -g @earendil-works/pi-coding-agent@0.74.0";
+export const PI_SECURITY_BLOCKED_MESSAGE =
+  "Pi is disabled because its bundled dependencies have known vulnerabilities. " +
+  "Use native Codex, Claude, or OpenCode until the Pi distribution is patched and qualified.";
+
+export function assertPiRuntimeAvailable(): void {
+  throw Object.assign(new Error(PI_SECURITY_BLOCKED_MESSAGE), {
+    code: "PI_SECURITY_BLOCKED",
+    retryable: false,
+  });
+}
+
+export const SANDBOX_INSTALL_COMMAND =
+  "printf '%s\\n' 'Pi is disabled until its distribution is patched and qualified. Use Codex, Claude, or OpenCode.' >&2; exit 1";
 
 export const models: Array<{ id: string; label: string }> = [];
 

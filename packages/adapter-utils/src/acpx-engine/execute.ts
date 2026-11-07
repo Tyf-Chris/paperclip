@@ -1024,12 +1024,6 @@ function isErrnoException(err: unknown, code: string): err is NodeJS.ErrnoExcept
   return err instanceof Error && "code" in err && err.code === code;
 }
 
-async function ensureCopiedFile(target: string, source: string): Promise<void> {
-  if (await pathExists(target)) return;
-  await ensureParentDir(target);
-  await fs.copyFile(source, target);
-}
-
 async function prepareManagedCodexHome(input: {
   companyId: string;
   sourceHome: string;
@@ -1054,19 +1048,11 @@ async function prepareManagedCodexHome(input: {
       contents: JSON.stringify({ OPENAI_API_KEY: apiKey }),
       mode: 0o600,
     });
-  } else {
-    const sourceAuth = path.join(sourceHome, "auth.json");
-    if (await pathExists(sourceAuth)) await ensureSymlink(targetAuth, sourceAuth);
-  }
-
-  for (const name of ["config.json", "config.toml", "instructions.md"]) {
-    const source = path.join(sourceHome, name);
-    if (await pathExists(source)) await ensureCopiedFile(path.join(targetHome, name), source);
   }
 
   await onLog(
     "stdout",
-    `[paperclip] Using Paperclip-managed ACPX Codex home "${targetHome}" (seeded from "${sourceHome}").\n`,
+    `[paperclip] Using Paperclip-managed ACPX Codex home "${targetHome}" without importing the host configuration or login.\n`,
   );
   return targetHome;
 }
@@ -1344,8 +1330,7 @@ async function prepareCodexSkillRuntime(input: {
     typeof process.env.CODEX_HOME === "string" && process.env.CODEX_HOME.trim().length > 0
       ? path.resolve(process.env.CODEX_HOME.trim())
       : path.join(os.homedir(), ".codex");
-  const apiKey = input.env.OPENAI_API_KEY?.trim() || input.env.CODEX_API_KEY?.trim()
-    || process.env.OPENAI_API_KEY?.trim() || process.env.CODEX_API_KEY?.trim();
+  const apiKey = input.env.OPENAI_API_KEY?.trim() || input.env.CODEX_API_KEY?.trim();
   // Keep API-key auth separate from the company home used by subscription
   // agents, so one agent cannot switch another agent's login on its next turn.
   const managedCodexHome = apiKey
@@ -1657,6 +1642,7 @@ async function writePaperclipClaudeSettings(input: {
   stateDir: string;
   agentHome: string;
   companyId: string;
+  allowAutomaticTools: boolean;
 }): Promise<PaperclipClaudeSettingsResult> {
   const filePath = path.join(input.cwd, ".claude", "settings.local.json");
   const instanceRoot = defaultPaperclipInstanceDir();
@@ -1694,15 +1680,16 @@ async function writePaperclipClaudeSettings(input: {
   const existingAdditionalDirectories = Array.isArray(existingPerms.additionalDirectories)
     ? (existingPerms.additionalDirectories as unknown[]).filter((value): value is string => typeof value === "string")
     : [];
-  const mergedAllow = uniqueSorted([...existingAllow, ...paperclipAllow]);
-  const mergedAdditionalDirectories = uniqueSorted([
+  const mergedAllow = input.allowAutomaticTools ? uniqueSorted([...existingAllow, ...paperclipAllow]) : [];
+  const mergedAdditionalDirectories = input.allowAutomaticTools ? uniqueSorted([
     ...existingAdditionalDirectories,
     ...paperclipAdditionalDirectories,
-  ]);
+  ]) : [];
   const existingDefaultMode =
     typeof existingPerms.defaultMode === "string" ? (existingPerms.defaultMode as string) : "";
   const defaultMode =
-    existingDefaultMode && existingDefaultMode !== "dontAsk" ? existingDefaultMode : "default";
+    input.allowAutomaticTools && existingDefaultMode && existingDefaultMode !== "dontAsk"
+      ? existingDefaultMode : "default";
   const overrodeDontAsk = existingDefaultMode === "dontAsk";
 
   const nextPermissions: Record<string, unknown> = {
@@ -2167,6 +2154,7 @@ async function buildRuntime(input: {
       // still receives this run's actual AGENT_HOME.
       agentHome: asString(workspaceContext.agentHomeForPermissions, agentHome),
       companyId: agent.companyId,
+      allowAutomaticTools: permissionMode === "approve-all",
     });
     skillCommandNotes.push(
       `Wrote Paperclip-managed Claude settings to ${paperclipClaudeSettings.filePath} (defaultMode=${paperclipClaudeSettings.defaultMode}${

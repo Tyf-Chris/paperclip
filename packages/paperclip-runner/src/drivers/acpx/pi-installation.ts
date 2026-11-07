@@ -8,6 +8,7 @@ import { verifyPiRuntimeLayoutForNativeSnapshot, type PiRuntimeManifest } from "
 import { readNativeAcpxDistributionEntries } from "./native-distribution-integrity.js";
 import { resolveRunnerProviderAssetsRoot } from "./provider-assets-root.js";
 import { QUALIFIED_ACPX_PROFILES, type AcpxReleaseProfile } from "./qualified-profiles.js";
+import { assertPiRuntimeAvailable } from "./pi-security-policy.js";
 
 const MAX_DISTRIBUTION_METADATA_BYTES = 4 * 1024 * 1024;
 const FIXED_PATHS = Object.freeze({
@@ -47,6 +48,7 @@ async function readDistributionMetadata(path: string): Promise<Record<string, un
  * Qualification status remains the caller's production admission gate.
  */
 export async function verifyPiInstallation(profile: AcpxReleaseProfile): Promise<VerifiedAcpxInstallation> {
+  assertPiRuntimeAvailable();
   assertPiInstallationProfile(profile);
   const target = `${process.platform}-${process.arch}`;
   if (!Object.hasOwn(PI_DISTRIBUTION_CLOSURE_SHA256, target)) throw new Error("Pi distribution target is unsupported");

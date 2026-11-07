@@ -5,6 +5,15 @@ contract. It does not duplicate the full list of individual events or
 dimensions. It documents extra semantic and privacy rules where the generated
 shape is not sufficient.
 
+## Local fork consent policy
+
+This fork disables first-party telemetry by default. New instance configuration
+sets `telemetry.enabled` to `false`. Missing consent also disables telemetry
+before the CLI creates an instance. Set `telemetry.enabled` to `true` only after
+reviewing the event contract. `PAPERCLIP_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1`,
+and CI detection still override consent and disable sending. Existing explicit
+consent is preserved. This policy changes no event fields or trace settings.
+
 The canonical source for first-party event names, dimensions, optionality,
 allowed primitive value types, and enum descriptions is
 `packages/shared/src/telemetry/generated/paperclip-telemetry.ts`.

@@ -1,5 +1,8 @@
 // GENERATED — DO NOT EDIT.
 
+/** Local fork policy: first-party telemetry requires explicit operator consent. */
+export const TELEMETRY_ENABLED_BY_DEFAULT = false;
+
 export interface PaperclipAgentCreatedDimensions {
 agent_id: string
 agent_role: ("ceo" | "cto" | "cmo" | "cfo" | "security" | "engineer" | "designer" | "pm" | "qa" | "devops" | "researcher" | "general" | "other")

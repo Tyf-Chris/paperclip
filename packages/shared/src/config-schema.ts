@@ -8,6 +8,7 @@ import {
   STORAGE_PROVIDERS,
 } from "./constants.js";
 import { validateConfiguredBindMode } from "./network-bind.js";
+import { TELEMETRY_ENABLED_BY_DEFAULT } from "./telemetry/generated/paperclip-telemetry.js";
 
 export const configMetaSchema = z.object({
   version: z.literal(1),
@@ -46,7 +47,7 @@ export const loggingConfigSchema = z.object({
 }).passthrough();
 
 export const serverConfigSchema = z.object({
-  deploymentMode: z.enum(DEPLOYMENT_MODES).default("local_trusted"),
+  deploymentMode: z.enum(DEPLOYMENT_MODES).default("authenticated"),
   exposure: z.enum(DEPLOYMENT_EXPOSURES).default("private"),
   bind: z.enum(BIND_MODES).optional(),
   customBindHost: z.string().optional(),
@@ -100,7 +101,7 @@ export const secretsConfigSchema = z.object({
 }).passthrough();
 
 export const telemetryConfigSchema = z.object({
-  enabled: z.boolean().default(true),
+  enabled: z.boolean().default(TELEMETRY_ENABLED_BY_DEFAULT),
 }).passthrough().prefault({});
 
 export const updatesConfigSchema = z.object({
